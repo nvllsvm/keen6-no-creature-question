@@ -1,76 +1,23 @@
-#define VERSION "0.9"
-/*
-* unlzexe ver 0.5 (PC-VAN UTJ44266 Kou )
-*   UNLZEXE converts the compressed file by lzexe(ver.0.90,0.91) to the
-*   UNcompressed executable one.
-*
-*   usage:  UNLZEXE packedfile[.EXE] [unpackedfile.EXE]
-
-v0.6  David Kirschbaum, Toad Hall, kirsch@usasoc.soc.mil, Jul 91
-	Problem reported by T.Salmi (ts@uwasa.fi) with UNLZEXE when run
-	with TLB-V119 on 386's.
-	Stripping out the iskanji and isjapan() stuff (which uses a somewhat
-	unusual DOS interrupt) to see if that's what's biting us.
-
---  Found it, thanks to Dan Lewis (DLEWIS@SCUACC.SCU.EDU).
-	Silly us:  didn't notice the "r.h.al=0x3800;" in isjapan().
-	Oh, you don't see it either?  INT functions are called with AH
-	having the service.  Changing to "r.x.ax=0x3800;".
-
-v0.7  Alan Modra, amodra@sirius.ucs.adelaide.edu.au, Nov 91
-    Fixed problem with large files by casting ihead components to long
-    in various expressions.
-    Fixed MinBSS & MaxBSS calculation (ohead[5], ohead[6]).  Now UNLZEXE
-    followed by LZEXE should give the original file.
-
-v0.8  Vesselin Bontchev, bontchev@fbihh.informatik.uni-hamburg.de, Aug 92
-    Fixed recognition of EXE files - both 'MZ' and 'ZM' in the header
-    are recognized.
-    Recognition of compressed files made more robust - now just
-    patching the 'LZ90' and 'LZ91' strings will not fool the program.
-
-v0.9  Stian Skjelstad, stian.skjelstad@gmail.com, Aug 2019
-    Use memmove when memory-regions overlap
-    Do not use putw/getw, since they on modern systems do not read/write 16bit
-    getc() return char, which might be signed.
-    Include POSIX headers
-    span + pointer, was expected to wrap 16bit
-*/
-
+/* 
+ * No Creature Question Patch for Commander Keen 6 - Aliens Ate My Baby Sitter
+ *
+ * Andrew Rabert 2025
+ * ar@nullsum.net
+ *
+ * Contains unlzexe code copied from https://github.com/mywave82/unlzexe
+ */
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#ifdef __TURBOC__
-#include <dos.h>
-#include <dir.h>
-/*
-#define MAXPATH   80
-#define MAXDRIVE  3
-#define MAXDIR	  66
-#define MAXFILE   9
-#define MAXEXT	  5
-#define FILENAME_MAX MAXPATH
-*/
-#else
 #include <stdint.h>        /* v0.9 */
 typedef uint16_t WORD;     /* v0.9 */
 typedef uint8_t BYTE;      /* v0.9 */
-#endif
 
 #define FAILURE 1
 #define SUCCESS 0
 
-int isjapan(void);
-int japan_f;
-#define iskanji(c)	('\x81'<=(c)&&(c)<='\x9f' || '\xe0'<=(c)&&(c)<='\xfc')
+char *tmp_filename = "$tmpfil$.exe";
 
-char *tmpfname = "$tmpfil$.exe";
-char *backup_ext = ".olz";
-char ipath[FILENAME_MAX],
-     opath[FILENAME_MAX],
-     ofname[13];
-
-int fnamechg(char*,char*,char*,int);
 int rdhead(FILE *,int *);
 int mkreltbl(FILE *,FILE *,int);
 int unpack(FILE *,FILE *);
@@ -78,134 +25,6 @@ void wrhead(FILE *);
 int reloc90(FILE *ifile,FILE *ofile,long fpos);
 int reloc91(FILE *ifile,FILE *ofile,long fpos);
 
-//int main(int argc,char **argv){
-//    FILE *ifile,*ofile;
-//    int  ver,rename_sw=0;
-//
-//    printf("UNLZEXE Ver. "VERSION"\n");             /* v0.6 */
-//    japan_f=isjapan();
-//    if(argc!=3 && argc!=2){
-//        printf("usage: UNLZEXE packedfile [unpackedfile]\n");
-//        exit(EXIT_FAILURE);
-//    }
-//    if(argc==2)
-//        rename_sw=1;
-//    if(fnamechk(ipath,opath,ofname,argc,argv)!=SUCCESS) {
-//        exit(EXIT_FAILURE);
-//    }
-//    if((ifile=fopen(ipath,"rb"))==NULL){
-//        printf("'%s' :not found\n",ipath);
-//            exit(EXIT_FAILURE);
-//    }
-//
-//    if(rdhead(ifile,&ver)!=SUCCESS){
-//        printf("'%s' is not LZEXE file.\n",ipath);
-//        fclose(ifile); exit(EXIT_FAILURE);
-//    }
-//    if((ofile=fopen(opath,"w+b"))==NULL){
-//        printf("can't open '%s'.\n",opath);
-//        fclose(ifile); exit(EXIT_FAILURE);
-//    }
-//    printf("file '%s' is compressed by LZEXE Ver. 0.%d\n",ipath,ver); /* v0.8 */
-//    if(mkreltbl(ifile,ofile,ver)!=SUCCESS) {
-//        fclose(ifile);
-//        fclose(ofile);
-//        remove(opath);
-//        exit(EXIT_FAILURE);
-//    }
-//    if(unpack(ifile,ofile)!=SUCCESS) {
-//        fclose(ifile);
-//        fclose(ofile);
-//        remove(opath);
-//        exit(EXIT_FAILURE);
-//    }
-//    fclose(ifile);
-//    wrhead(ofile);
-//    fclose(ofile);
-//
-//    if(fnamechg(ipath,opath,ofname,rename_sw)!=SUCCESS){
-//        exit(EXIT_FAILURE);
-//    }
-//    exit(EXIT_SUCCESS);
-//}
-
-
-
-void parsepath(char *pathname, int *fname, int *ext);
-
-
-int fnamechg(char *ipath,char *opath,char *ofname,int rename_sw) {
-    int idx_name,idx_ext;
-    char tpath[FILENAME_MAX];
-
-    if(rename_sw) {
-        strcpy(tpath,ipath);
-        parsepath(tpath,&idx_name,&idx_ext);
-        strcpy(tpath+idx_ext,backup_ext);
-        remove(tpath);
-        if(rename(ipath,tpath)){
-            printf("can't make '%s'.\n", tpath);
-            remove(opath);
-            return(FAILURE);
-        }
-	printf("'%s' is renamed to '%s'.\n",ipath,tpath);
-    }
-    strcpy(tpath,opath);
-    parsepath(tpath,&idx_name,&idx_ext);
-    strcpy(tpath+idx_name,ofname);
-    remove(tpath);
-    if(rename(opath,tpath)){
-        if(rename_sw) {
-            strcpy(tpath,ipath);
-            parsepath(tpath,&idx_name,&idx_ext);
-            strcpy(tpath+idx_ext,backup_ext);
-            rename(tpath,ipath);
-        }
-        printf("can't make '%s'.  unpacked file '%s' is remained.\n",
-                 tpath, tmpfname);
-
-        return(FAILURE);
-    }
-    printf("unpacked file '%s' is generated.\n",tpath);
-    return(SUCCESS);
-}
-
-int isjapan() {
-#ifdef __TURBOC__
-    union REGS r;
-    struct SREGS rs;
-    BYTE buf[34];
-
-    segread(&rs);
-    rs.ds=rs.ss;  r.x.dx=(WORD)buf;
-/*	r.h.al=0x3800; v0.6 */
-	r.x.ax=0x3800;		/* svc 38H, check for country v0.6 */
-    intdosx(&r,&r,&rs);
-    return (! strcmp ((char *) (buf + 2), "\\"));       /* v0.8 */
-#else
-    return 0;
-#endif
-}
-
-void parsepath(char *pathname, int *fname, int *ext) {
-    /* use  int japan_f */
-    char c;
-    int i;
-
-    *fname=0; *ext=0;
-    for(i=0;c=pathname[i];i++) {
-        if(japan_f && iskanji(c))
-            i++;
-        else
-            switch(c) {
-            case ':' :
-            case '\\':  *fname=i+1; break;
-            case '.' :  *ext=i; break;
-            default  :  ;
-            }
-    }
-    if(*ext<=*fname) *ext=i;
-}
 /*-------------------------------------------*/
 static WORD ihead[0x10],ohead[0x10],inf[8];
 static long loadsize;
@@ -528,8 +347,6 @@ int get_image_size(char *buffer) {
 }
 
 const char* get_source(const char *keen6_filename) {
-    const char *tmp_filename = "KEEN6.TMP";
-
     FILE *keen6_file = fopen(keen6_filename, "rb");
     if (keen6_file == NULL) {
         printf("Error: Could not open file '%s'\n", keen6_filename);
@@ -550,7 +367,7 @@ const char* get_source(const char *keen6_filename) {
             fclose(keen6_file); 
             exit(EXIT_FAILURE);
         }
-        printf("file '%s' is compressed by LZEXE Ver. 0.%d\n",ipath,ver); /* v0.8 */
+        printf("file '%s' is compressed by LZEXE Ver. 0.%d\n",keen6_filename,ver); /* v0.8 */
         if(mkreltbl(keen6_file,tmp_file,ver)!=SUCCESS) {
             fclose(keen6_file);
             fclose(tmp_file);
@@ -568,11 +385,6 @@ const char* get_source(const char *keen6_filename) {
         wrhead(tmp_file);
         fclose(tmp_file);
 
-        if (rename(tmp_filename, keen6_filename) != 0) {
-            printf("Error: Could not rename temp file\n");
-            exit(EXIT_FAILURE);
-        }
-
         return tmp_filename;
     } 
     return keen6_filename;
@@ -580,7 +392,6 @@ const char* get_source(const char *keen6_filename) {
 
 
 int main(int argc, char *argv[]) {
-    // Check if the keen6_filename is provided
     if (argc != 2) {
         printf("Usage: %s <keen6_filename>\n", argv[0]);
         return 1;
@@ -595,7 +406,6 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // Seek to the end to determine the file size
     fseek(keen6_file, 0, SEEK_END);
     long file_size = ftell(keen6_file);
     rewind(keen6_file);
@@ -606,7 +416,6 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    // Allocate memory to read the file
     char *buffer = (char *)malloc(file_size + 1);
     if (buffer == NULL) {
         printf("Error: Not enough memory to read the file.\n");
@@ -614,7 +423,6 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // Read the file into memory
     size_t bytes_read = fread(buffer, 1, file_size, keen6_file);
     buffer[bytes_read] = '\0';  // Null-terminate for safety
 
@@ -670,7 +478,7 @@ int main(int argc, char *argv[]) {
         buffer[actual_offset] = patched[0];
         buffer[actual_offset+1] = patched[1];
         printf("Patching %s (%s).\n", keen6_filename, name);
-        FILE *file = fopen(keen6_filename, "wb");
+        FILE *file = fopen(source_filename, "wb");
         if (file == NULL) {
             perror("Failed to open file");
             return 1;
@@ -682,13 +490,19 @@ int main(int argc, char *argv[]) {
             return 1;
         }
         fclose(file);
+
+        if (source_filename != keen6_filename) {
+            if (rename(source_filename, keen6_filename) != 0) {
+                printf("Error: Could not rename temp file\n");
+                exit(EXIT_FAILURE);
+            }
+        }
     } else if (buffer[actual_offset] == patched[0] && buffer[actual_offset+1] == patched[1]) {
         printf("Already patched.\n");
     } else {
         printf("Error: unexpected file contents. %d %d\n", buffer[actual_offset], buffer[actual_offset+1]);
     }
 
-    // Clean up
     free(buffer);
     fclose(keen6_file);
 
